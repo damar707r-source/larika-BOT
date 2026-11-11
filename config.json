@@ -1,0 +1,14 @@
+
+{
+  "name": "𝐋𝐚𝐫𝐢𝐤𝐚 BOT",
+  "theme": "dark",
+  "embedColor": "#17151F",
+  "accentColor": "#9B5CFF",
+  "maxLinks": 3,
+  "websitePreview": true,
+  "imagePreview": true,
+  "discordInvitePreview": true,
+  "replyUnderMessage": true,
+  "ignoreBots": true,
+  "ignoreWebhooks": true
+}
