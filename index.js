@@ -11,8 +11,31 @@ const {
 
 require("dotenv").config();
 
+const http = require("node:http");
 const dns = require("node:dns").promises;
 const net = require("node:net");
+
+// =====================================
+// RENDER WEB SERVER
+// =====================================
+
+const PORT = process.env.PORT || 3000;
+
+const server = http.createServer((req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/plain; charset=utf-8"
+  });
+
+  res.end("𝐋𝐚𝐫𝐢𝐤𝐚 BOT is running!");
+});
+
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Web Server running on port ${PORT}`);
+});
+
+// =====================================
+// DISCORD CLIENT
+// =====================================
 
 const client = new Client({
   intents: [
@@ -491,4 +514,10 @@ process.on("unhandledRejection", error => {
 // LOGIN
 // =====================================
 
-client.login(process.env.DISCORD_TOKEN);
+if (!process.env.DISCORD_TOKEN) {
+  console.error("DISCORD_TOKEN is missing!");
+} else {
+  client.login(process.env.DISCORD_TOKEN).catch(error => {
+    console.error("Discord Login Failed:", error);
+  });
+}
