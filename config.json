@@ -4,23 +4,17 @@
   "theme": "dark",
   "embedColor": "#17151F",
   "accentColor": "#9B5CFF",
-
   "maxLinks": 3,
-
   "websitePreview": true,
   "imagePreview": true,
   "discordInvitePreview": true,
-
   "replyUnderMessage": true,
-
   "ignoreBots": true,
   "ignoreWebhooks": true,
-
-  "timeout": 8000,
+  "timeout": 10000,
   "maxHtmlBytes": 1000000,
   "maxImageBytes": 8000000,
   "maxRedirects": 4,
-
   "preventDuplicatePreviews": true,
   "enableLogs": true
 }
