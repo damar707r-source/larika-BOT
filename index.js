@@ -29,8 +29,12 @@ const server = http.createServer((req, res) => {
   res.end("𝐋𝐚𝐫𝐢𝐤𝐚 BOT is running!");
 });
 
+server.on("error", error => {
+  console.error("[LARIKA] Web Server Error:", error);
+});
+
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Web Server running on port ${PORT}`);
+  console.log(`[LARIKA] Web Server running on port ${PORT}`);
 });
 
 // =====================================
@@ -46,7 +50,7 @@ const client = new Client({
 });
 
 // =====================================
-// LARIKA BOT CONFIGURATION
+// LARIKA CONFIGURATION
 // =====================================
 
 const CONFIG = {
@@ -76,13 +80,16 @@ function cleanURL(url) {
 }
 
 function getURLs(content) {
-  return [...new Set(
-    (content.match(URL_REGEX) || []).map(cleanURL)
-  )].slice(0, CONFIG.maxLinks);
+  return [
+    ...new Set(
+      (content.match(URL_REGEX) || []).map(cleanURL)
+    )
+  ].slice(0, CONFIG.maxLinks);
 }
 
 function truncate(text, length = 4000) {
   if (!text) return "";
+
   return text.length > length
     ? text.slice(0, length - 1) + "…"
     : text;
@@ -105,6 +112,7 @@ function isPrivateIP(ip) {
 
   if (net.isIPv6(ip)) {
     const a = ip.toLowerCase();
+
     return (
       a === "::" ||
       a === "::1" ||
@@ -113,12 +121,19 @@ function isPrivateIP(ip) {
       a.startsWith("fe8") ||
       a.startsWith("fe9") ||
       a.startsWith("fea") ||
-      a.startsWith("feb")
+      a.startsWith("feb") ||
+      a.startsWith("::ffff:127.") ||
+      a.startsWith("::ffff:10.") ||
+      a.startsWith("::ffff:192.168.")
     );
   }
 
   return true;
 }
+
+// =====================================
+// URL SECURITY
+// =====================================
 
 async function checkURL(value) {
   const url = new URL(value);
@@ -142,7 +157,9 @@ async function checkURL(value) {
   }
 
   if (net.isIP(host)) {
-    if (isPrivateIP(host)) throw new Error("Private IP");
+    if (isPrivateIP(host)) {
+      throw new Error("Private IP");
+    }
   } else {
     const records = await dns.lookup(host, {
       all: true
@@ -150,7 +167,7 @@ async function checkURL(value) {
 
     if (
       !records.length ||
-      records.some(r => isPrivateIP(r.address))
+      records.some(record => isPrivateIP(record.address))
     ) {
       throw new Error("Private host");
     }
@@ -177,7 +194,9 @@ async function safeFetch(value) {
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
 
-      if (!location) throw new Error("Invalid redirect");
+      if (!location) {
+        throw new Error("Invalid redirect");
+      }
 
       current = new URL(location, current).toString();
       continue;
@@ -192,8 +211,15 @@ async function safeFetch(value) {
   throw new Error("Too many redirects");
 }
 
+// =====================================
+// HTML HELPERS
+// =====================================
+
 function meta(html, key) {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = key.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&"
+  );
 
   const patterns = [
     new RegExp(
@@ -208,6 +234,7 @@ function meta(html, key) {
 
   for (const pattern of patterns) {
     const match = html.match(pattern);
+
     if (match) return match[1].trim();
   }
 
@@ -243,7 +270,7 @@ async function websitePreview(link) {
   const { response, url } = await safeFetch(link);
 
   if (!response.ok) {
-    throw new Error("Website unavailable");
+    throw new Error(`Website unavailable: ${response.status}`);
   }
 
   const type = (
@@ -254,15 +281,22 @@ async function websitePreview(link) {
     throw new Error("Not an HTML website");
   }
 
-  const html = (await response.text()).slice(0, 1000000);
+  const html = (
+    await response.text()
+  ).slice(0, 1000000);
 
   let title =
     meta(html, "og:title") ||
     meta(html, "twitter:title");
 
   if (!title) {
-    const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    title = match ? match[1].replace(/<[^>]+>/g, "") : "";
+    const match = html.match(
+      /<title[^>]*>([\s\S]*?)<\/title>/i
+    );
+
+    title = match
+      ? match[1].replace(/<[^>]+>/g, "")
+      : "";
   }
 
   const description =
@@ -270,20 +304,26 @@ async function websitePreview(link) {
     meta(html, "description") ||
     meta(html, "twitter:description");
 
-  const image =
-    absoluteURL(
-      meta(html, "og:image") ||
-      meta(html, "twitter:image"),
-      url
-    );
+  const image = absoluteURL(
+    meta(html, "og:image") ||
+    meta(html, "twitter:image"),
+    url
+  );
 
   const embed = new EmbedBuilder()
     .setColor(CONFIG.color)
-    .setTitle(truncate(decodeHTML(title || new URL(url).hostname), 256))
+    .setTitle(
+      truncate(
+        decodeHTML(title || new URL(url).hostname),
+        256
+      )
+    )
     .setURL(url)
     .setDescription(
       truncate(
-        decodeHTML(description || "معاينة الموقع بواسطة Larika"),
+        decodeHTML(
+          description || "معاينة الموقع بواسطة Larika"
+        ),
         4000
       )
     )
@@ -291,7 +331,9 @@ async function websitePreview(link) {
       text: "𝐋𝐚𝐫𝐢𝐤𝐚 BOT • Website Preview"
     });
 
-  if (image) embed.setImage(image);
+  if (image) {
+    embed.setImage(image);
+  }
 
   return embed;
 }
@@ -332,11 +374,15 @@ async function invitePreview(link, code) {
 
   const guild = invite.guild;
 
-  if (!guild) throw new Error("Invalid invitation");
+  if (!guild) {
+    throw new Error("Invalid invitation");
+  }
 
   const embed = new EmbedBuilder()
     .setColor(CONFIG.color)
-    .setTitle(truncate(guild.name || "Discord Server", 256))
+    .setTitle(
+      truncate(guild.name || "Discord Server", 256)
+    )
     .setURL(invite.url || link)
     .setDescription("دعوة للانضمام إلى سيرفر ديسكورد")
     .addFields(
@@ -359,9 +405,13 @@ async function invitePreview(link, code) {
       text: "𝐋𝐚𝐫𝐢𝐤𝐚 BOT • Discord Preview"
     });
 
-  const icon = guild.iconURL({ size: 512 });
+  const icon = guild.iconURL({
+    size: 512
+  });
 
-  if (icon) embed.setThumbnail(icon);
+  if (icon) {
+    embed.setThumbnail(icon);
+  }
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -393,6 +443,7 @@ async function createPreview(link) {
     };
   }
 
+  // Important: website previews must also return an embed object.
   return {
     embed: await websitePreview(link)
   };
@@ -405,7 +456,9 @@ async function createPreview(link) {
 client.once("ready", () => {
   console.log("--------------------------------");
   console.log("𝐋𝐚𝐫𝐢𝐤𝐚 BOT ONLINE");
-  console.log(client.user.tag);
+  console.log("Bot:", client.user.tag);
+  console.log("Bot ID:", client.user.id);
+  console.log("Servers:", client.guilds.cache.size);
   console.log("--------------------------------");
 
   client.user.setActivity("Automatic Previews", {
@@ -442,6 +495,8 @@ client.on("messageCreate", async message => {
 
     for (const link of links) {
       try {
+        console.log("[LARIKA] Processing:", link);
+
         const result = await createPreview(link);
 
         if (result?.embed) {
@@ -453,8 +508,7 @@ client.on("messageCreate", async message => {
         }
       } catch (error) {
         console.log(
-          "Preview skipped:",
-          link,
+          "[LARIKA] Preview skipped:",
           error.message
         );
       }
@@ -485,8 +539,10 @@ client.on("messageCreate", async message => {
       failIfNotExists: false
     });
 
+    console.log("[LARIKA] Preview sent successfully");
+
   } catch (error) {
-    console.error("Preview error:", error);
+    console.error("[LARIKA] Preview error:", error);
   }
 });
 
@@ -499,25 +555,61 @@ setInterval(() => {
 }, 60 * 60 * 1000).unref();
 
 // =====================================
-// ERRORS
+// DISCORD ERRORS
 // =====================================
 
 client.on("error", error => {
-  console.error("Discord Error:", error);
+  console.error("[LARIKA] Discord Error:", error);
+});
+
+client.on("shardError", error => {
+  console.error("[LARIKA] Shard Error:", error);
+});
+
+client.on("warn", warning => {
+  console.warn("[LARIKA] Discord Warning:", warning);
 });
 
 process.on("unhandledRejection", error => {
-  console.error("Unhandled Rejection:", error);
+  console.error("[LARIKA] Unhandled Rejection:", error);
+});
+
+process.on("uncaughtException", error => {
+  console.error("[LARIKA] Uncaught Exception:", error);
 });
 
 // =====================================
-// LOGIN
+// DISCORD LOGIN
 // =====================================
 
-if (!process.env.DISCORD_TOKEN) {
-  console.error("DISCORD_TOKEN is missing!");
-} else {
-  client.login(process.env.DISCORD_TOKEN).catch(error => {
-    console.error("Discord Login Failed:", error);
-  });
+async function startBot() {
+  console.log("--------------------------------");
+  console.log("[LARIKA] Starting Discord login...");
+
+  const token = process.env.DISCORD_TOKEN?.trim();
+
+  console.log(
+    "[LARIKA] DISCORD_TOKEN exists:",
+    Boolean(token)
+  );
+
+  if (!token) {
+    console.error("[LARIKA] DISCORD_TOKEN is missing!");
+    return;
+  }
+
+  try {
+    await client.login(token);
+
+    console.log("[LARIKA] Login request accepted");
+  } catch (error) {
+    console.error("--------------------------------");
+    console.error("[LARIKA] DISCORD LOGIN FAILED");
+    console.error("Error name:", error.name);
+    console.error("Error code:", error.code);
+    console.error("Error message:", error.message);
+    console.error("--------------------------------");
+  }
 }
+
+startBot();
