@@ -126,85 +126,6 @@ server.listen(PORT, "0.0.0.0", () => {
 });
 
 // ==========================================
-// NETWORK DIAGNOSTICS
-// ==========================================
-
-async function testDiscordAPI(token) {
-  console.log("[NETWORK] Checking DNS...");
-
-  for (const host of ["discord.com", "gateway.discord.gg"]) {
-    try {
-      const records = await dns.lookup(host, { all: true });
-
-      console.log(
-        `[NETWORK] DNS ${host}: OK (${records.length} addresses)`
-      );
-    } catch (error) {
-      console.error(
-        `[NETWORK] DNS ${host} FAILED:`,
-        error.code || error.message
-      );
-
-      throw new Error(`DNS lookup failed for ${host}`);
-    }
-  }
-
-  console.log("[NETWORK] Testing Discord API...");
-
-  let response;
-
-  try {
-    response = await fetch(
-      "https://discord.com/api/v10/gateway/bot",
-      {
-        headers: {
-          Authorization: `Bot ${token}`,
-          "User-Agent": "DiscordBot (https://discord.com, 1.0)"
-        },
-        signal: AbortSignal.timeout(15000)
-      }
-    );
-  } catch (error) {
-    console.error(
-      "[NETWORK] Discord API connection failed:",
-      error.name,
-      error.cause?.code || error.code || error.message
-    );
-
-    throw new Error("Could not connect to Discord API");
-  }
-
-  console.log("[NETWORK] Discord API HTTP:", response.status);
-
-  if (response.status === 401) {
-    await response.body?.cancel();
-    throw new Error("Discord rejected the bot token (401)");
-  }
-
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(`Discord API returned HTTP ${response.status}`);
-  }
-
-  let data;
-
-  try {
-    data = await response.json();
-  } catch {
-    throw new Error("Discord API returned invalid JSON");
-  }
-
-  if (!data.url) {
-    throw new Error("Discord Gateway URL was not returned");
-  }
-
-  console.log("[NETWORK] Discord API authentication: SUCCESS");
-  console.log("[NETWORK] Gateway URL received: YES");
-
-  return data;
-}
-
-// ==========================================
 // URL HELPERS
 // ==========================================
 
@@ -881,6 +802,7 @@ async function startBot() {
   if (!token) {
     console.error("[LARIKA] DISCORD_TOKEN is missing");
     process.exit(1);
+    return;
   }
 
   const watchdog = setTimeout(() => {
@@ -891,17 +813,22 @@ async function startBot() {
         "[LARIKA] Discord Gateway has not reached READY after 45 seconds."
       );
       console.error(
-        "[LARIKA] Check the DNS/API results above and the Gateway events."
+        "[LARIKA] Check the Gateway connection and the errors above."
       );
       console.error("");
     }
   }, 45000);
 
+  // Register before login so the READY event cannot be missed.
+  client.once("ready", () => {
+    clearTimeout(watchdog);
+  });
+
   try {
-    await testDiscordAPI(token);
+    console.log("[LARIKA] Connecting directly to Discord Gateway...");
 
-    console.log("[LARIKA] Starting Gateway login...");
-
+    // Do not make an extra Discord API request before login.
+    // discord.js handles the connection and authentication.
     await client.login(token);
 
     console.log("[LARIKA] Login request accepted.");
@@ -911,15 +838,13 @@ async function startBot() {
 
     console.error("");
     console.error("[LARIKA] STARTUP FAILED");
-    console.error("Error:", error.message);
+    console.error("[LARIKA] Error name:", error.name || "Unknown");
+    console.error("[LARIKA] Error code:", error.code || "Not provided");
+    console.error("[LARIKA] Error message:", error.message || error);
     console.error("");
 
     process.exit(1);
   }
-
-  client.once("ready", () => {
-    clearTimeout(watchdog);
-  });
 }
 
 // ==========================================
