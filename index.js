@@ -17,73 +17,48 @@ const net = require("node:net");
 const fs = require("node:fs");
 const path = require("node:path");
 
-// =====================================
-// CONFIGURATION
-// =====================================
+// ==========================================
+// CONFIG
+// ==========================================
 
 function loadConfig() {
-  const configPath = path.join(__dirname, "config.json");
+  const file = path.join(__dirname, "config.json");
+  const data = JSON.parse(fs.readFileSync(file, "utf8"));
 
-  const data = JSON.parse(
-    fs.readFileSync(configPath, "utf8")
-  );
-
-  function color(value, fallback) {
-    return /^#[0-9a-f]{6}$/i.test(value || "")
-      ? parseInt(value.slice(1), 16)
-      : fallback;
-  }
-
-  function number(value, fallback, min, max) {
+  const getNumber = (value, fallback, min, max) => {
     const n = Number(value);
     return Number.isFinite(n)
       ? Math.max(min, Math.min(max, n))
       : fallback;
-  }
+  };
+
+  const getColor = (value, fallback) => {
+    return /^#[0-9a-f]{6}$/i.test(value || "")
+      ? parseInt(value.slice(1), 16)
+      : fallback;
+  };
 
   return {
     name: data.name || "𝐋𝐚𝐫𝐢𝐤𝐚 BOT",
+    color: getColor(data.embedColor, 0x17151F),
+    accent: getColor(data.accentColor, 0x9B5CFF),
 
-    color: color(data.embedColor, 0x17151F),
-    accent: color(data.accentColor, 0x9B5CFF),
-
-    maxLinks: number(data.maxLinks, 3, 1, 10),
+    maxLinks: getNumber(data.maxLinks, 3, 1, 10),
 
     websitePreview: data.websitePreview !== false,
     imagePreview: data.imagePreview !== false,
     discordInvitePreview: data.discordInvitePreview !== false,
 
     replyUnderMessage: data.replyUnderMessage !== false,
-
     ignoreBots: data.ignoreBots !== false,
     ignoreWebhooks: data.ignoreWebhooks !== false,
 
-    timeout: number(data.timeout, 8000, 3000, 20000),
+    timeout: getNumber(data.timeout, 10000, 3000, 20000),
+    maxHtmlBytes: getNumber(data.maxHtmlBytes, 1000000, 100000, 2000000),
+    maxImageBytes: getNumber(data.maxImageBytes, 8000000, 100000, 15000000),
+    maxRedirects: getNumber(data.maxRedirects, 4, 0, 8),
 
-    maxHtmlBytes: number(
-      data.maxHtmlBytes,
-      1000000,
-      100000,
-      2000000
-    ),
-
-    maxImageBytes: number(
-      data.maxImageBytes,
-      8000000,
-      100000,
-      15000000
-    ),
-
-    maxRedirects: number(
-      data.maxRedirects,
-      4,
-      0,
-      8
-    ),
-
-    preventDuplicatePreviews:
-      data.preventDuplicatePreviews !== false,
-
+    preventDuplicatePreviews: data.preventDuplicatePreviews !== false,
     enableLogs: data.enableLogs !== false
   };
 }
@@ -94,7 +69,7 @@ try {
   CONFIG = loadConfig();
   console.log("[LARIKA] Configuration loaded");
 } catch (error) {
-  console.error("[LARIKA] Configuration error:", error.message);
+  console.error("[LARIKA] CONFIG ERROR:", error.message);
   process.exit(1);
 }
 
@@ -104,9 +79,9 @@ function log(...args) {
   }
 }
 
-// =====================================
+// ==========================================
 // DISCORD CLIENT
-// =====================================
+// ==========================================
 
 const client = new Client({
   intents: [
@@ -116,10 +91,9 @@ const client = new Client({
   ]
 });
 
-// =====================================
-// MINIMAL RENDER HEALTH CHECK
-// No public website or dashboard
-// =====================================
+// ==========================================
+// RENDER HEALTH CHECK
+// ==========================================
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -131,7 +105,7 @@ const server = http.createServer((req, res) => {
     });
 
     return res.end(JSON.stringify({
-      service: "Larika",
+      service: "Larika Discord Bot",
       discord: client.isReady() ? "connected" : "connecting"
     }));
   }
@@ -144,16 +118,95 @@ const server = http.createServer((req, res) => {
 });
 
 server.on("error", error => {
-  console.error("[LARIKA] Health server error:", error);
+  console.error("[LARIKA] HTTP SERVER ERROR:", error.message);
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  log("Render health listener started on port", PORT);
+  log("Health check listening on port", PORT);
 });
 
-// =====================================
-// CONSTANTS
-// =====================================
+// ==========================================
+// NETWORK DIAGNOSTICS
+// ==========================================
+
+async function testDiscordAPI(token) {
+  console.log("[NETWORK] Checking DNS...");
+
+  for (const host of ["discord.com", "gateway.discord.gg"]) {
+    try {
+      const records = await dns.lookup(host, { all: true });
+
+      console.log(
+        `[NETWORK] DNS ${host}: OK (${records.length} addresses)`
+      );
+    } catch (error) {
+      console.error(
+        `[NETWORK] DNS ${host} FAILED:`,
+        error.code || error.message
+      );
+
+      throw new Error(`DNS lookup failed for ${host}`);
+    }
+  }
+
+  console.log("[NETWORK] Testing Discord API...");
+
+  let response;
+
+  try {
+    response = await fetch(
+      "https://discord.com/api/v10/gateway/bot",
+      {
+        headers: {
+          Authorization: `Bot ${token}`,
+          "User-Agent": "DiscordBot (https://discord.com, 1.0)"
+        },
+        signal: AbortSignal.timeout(15000)
+      }
+    );
+  } catch (error) {
+    console.error(
+      "[NETWORK] Discord API connection failed:",
+      error.name,
+      error.cause?.code || error.code || error.message
+    );
+
+    throw new Error("Could not connect to Discord API");
+  }
+
+  console.log("[NETWORK] Discord API HTTP:", response.status);
+
+  if (response.status === 401) {
+    await response.body?.cancel();
+    throw new Error("Discord rejected the bot token (401)");
+  }
+
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`Discord API returned HTTP ${response.status}`);
+  }
+
+  let data;
+
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error("Discord API returned invalid JSON");
+  }
+
+  if (!data.url) {
+    throw new Error("Discord Gateway URL was not returned");
+  }
+
+  console.log("[NETWORK] Discord API authentication: SUCCESS");
+  console.log("[NETWORK] Gateway URL received: YES");
+
+  return data;
+}
+
+// ==========================================
+// URL HELPERS
+// ==========================================
 
 const URL_REGEX = /https?:\/\/[^\s<>()]+/gi;
 
@@ -178,17 +231,17 @@ function getURLs(content) {
   ].slice(0, CONFIG.maxLinks);
 }
 
-function truncate(value, length = 4000) {
+function truncate(value, max = 4000) {
   if (!value) return "";
 
-  return value.length > length
-    ? value.slice(0, length - 1) + "…"
+  return value.length > max
+    ? value.slice(0, max - 1) + "…"
     : value;
 }
 
-// =====================================
-// IP SECURITY
-// =====================================
+// ==========================================
+// PRIVATE IP PROTECTION
+// ==========================================
 
 function isPrivateIP(ip) {
   if (net.isIPv4(ip)) {
@@ -199,12 +252,10 @@ function isPrivateIP(ip) {
       p[0] === 10 ||
       p[0] === 127 ||
       p[0] >= 224 ||
-
       (p[0] === 100 && p[1] >= 64 && p[1] <= 127) ||
       (p[0] === 169 && p[1] === 254) ||
       (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
       (p[0] === 192 && p[1] === 168) ||
-
       (p[0] === 192 && p[1] === 0 && p[2] === 0) ||
       (p[0] === 192 && p[1] === 0 && p[2] === 2) ||
       (p[0] === 198 && (p[1] === 18 || p[1] === 19)) ||
@@ -214,26 +265,26 @@ function isPrivateIP(ip) {
   }
 
   if (net.isIPv6(ip)) {
-    const a = ip.toLowerCase();
+    const address = ip.toLowerCase();
 
-    if (a.startsWith("::ffff:")) {
-      const mapped = a.slice(7);
+    if (address.startsWith("::ffff:")) {
+      const mapped = address.slice(7);
 
       if (net.isIPv4(mapped)) {
         return isPrivateIP(mapped);
       }
     }
 
-    // Only allow globally routable IPv6 addresses.
-    return !a.startsWith("2") && !a.startsWith("3");
+    // Permit only global unicast IPv6 space.
+    return !address.startsWith("2") && !address.startsWith("3");
   }
 
   return true;
 }
 
-// =====================================
+// ==========================================
 // URL VALIDATION
-// =====================================
+// ==========================================
 
 async function checkURL(value) {
   let url;
@@ -245,16 +296,14 @@ async function checkURL(value) {
   }
 
   if (!["http:", "https:"].includes(url.protocol)) {
-    throw new Error("Invalid protocol");
+    throw new Error("Unsupported URL protocol");
   }
 
   if (url.username || url.password) {
     throw new Error("URL credentials blocked");
   }
 
-  const host = url.hostname
-    .toLowerCase()
-    .replace(/^\[|\]$/g, "");
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
 
   if (
     !host ||
@@ -288,9 +337,9 @@ async function checkURL(value) {
   return url;
 }
 
-// =====================================
-// SAFE FETCH
-// =====================================
+// ==========================================
+// SAFE FETCH WITH REDIRECT CHECKS
+// ==========================================
 
 async function safeFetch(value, options = {}) {
   let current = value;
@@ -300,7 +349,6 @@ async function safeFetch(value, options = {}) {
 
     const response = await fetch(url, {
       redirect: "manual",
-
       signal: AbortSignal.timeout(CONFIG.timeout),
 
       headers: {
@@ -319,27 +367,21 @@ async function safeFetch(value, options = {}) {
       }
 
       current = new URL(location, url).toString();
-
       continue;
     }
 
-    return {
-      response,
-      url: url.toString()
-    };
+    return { response, url: url.toString() };
   }
 
   throw new Error("Too many redirects");
 }
 
-// =====================================
+// ==========================================
 // LIMITED RESPONSE READER
-// =====================================
+// ==========================================
 
 async function readLimited(response, maxBytes) {
-  const length = Number(
-    response.headers.get("content-length")
-  );
+  const length = Number(response.headers.get("content-length"));
 
   if (Number.isFinite(length) && length > maxBytes) {
     await response.body?.cancel();
@@ -351,7 +393,6 @@ async function readLimited(response, maxBytes) {
   }
 
   const reader = response.body.getReader();
-
   const chunks = [];
   let total = 0;
 
@@ -377,12 +418,12 @@ async function readLimited(response, maxBytes) {
   return Buffer.concat(chunks);
 }
 
-// =====================================
+// ==========================================
 // HTML HELPERS
-// =====================================
+// ==========================================
 
-function decodeHTML(text) {
-  return text
+function decodeHTML(value) {
+  return value
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
@@ -416,10 +457,7 @@ function meta(html, key) {
 
     const content = getAttribute(tag, "content");
 
-    if (
-      name.toLowerCase() === key.toLowerCase() &&
-      content
-    ) {
+    if (name.toLowerCase() === key.toLowerCase() && content) {
       return content;
     }
   }
@@ -439,9 +477,9 @@ function absoluteURL(value, base) {
   }
 }
 
-// =====================================
+// ==========================================
 // WEBSITE PREVIEW
-// =====================================
+// ==========================================
 
 async function websitePreview(link) {
   const { response, url } = await safeFetch(link);
@@ -472,9 +510,7 @@ async function websitePreview(link) {
     meta(html, "twitter:title");
 
   if (!title) {
-    const match = html.match(
-      /<title[^>]*>([\s\S]*?)<\/title>/i
-    );
+    const match = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
 
     title = match
       ? match[1].replace(/<[^>]+>/g, "")
@@ -487,12 +523,10 @@ async function websitePreview(link) {
     meta(html, "twitter:description");
 
   let image = absoluteURL(
-    meta(html, "og:image") ||
-    meta(html, "twitter:image"),
+    meta(html, "og:image") || meta(html, "twitter:image"),
     url
   );
 
-  // Validate preview image destination.
   if (image) {
     try {
       await checkURL(image);
@@ -512,9 +546,7 @@ async function websitePreview(link) {
     .setURL(url)
     .setDescription(
       truncate(
-        decodeHTML(
-          description || "معاينة الموقع بواسطة Larika"
-        ),
+        decodeHTML(description || "معاينة الموقع بواسطة Larika"),
         4000
       )
     )
@@ -529,9 +561,9 @@ async function websitePreview(link) {
   return { embed };
 }
 
-// =====================================
+// ==========================================
 // IMAGE PREVIEW
-// =====================================
+// ==========================================
 
 async function imagePreview(link) {
   const { response, url } = await safeFetch(link, {
@@ -547,10 +579,7 @@ async function imagePreview(link) {
     throw new Error("Invalid image");
   }
 
-  const data = await readLimited(
-    response,
-    CONFIG.maxImageBytes
-  );
+  const data = await readLimited(response, CONFIG.maxImageBytes);
 
   if (!data.length) {
     throw new Error("Empty image");
@@ -568,9 +597,9 @@ async function imagePreview(link) {
   return { embed };
 }
 
-// =====================================
+// ==========================================
 // DISCORD INVITE PREVIEW
-// =====================================
+// ==========================================
 
 async function invitePreview(link, code) {
   const invite = await client.fetchInvite(code, {
@@ -585,26 +614,18 @@ async function invitePreview(link, code) {
 
   const embed = new EmbedBuilder()
     .setColor(CONFIG.color)
-    .setTitle(
-      truncate(guild.name || "Discord Server", 256)
-    )
+    .setTitle(truncate(guild.name || "Discord Server", 256))
     .setURL(invite.url || link)
-    .setDescription(
-      "دعوة للانضمام إلى سيرفر ديسكورد"
-    )
+    .setDescription("دعوة للانضمام إلى سيرفر ديسكورد")
     .addFields(
       {
         name: "الأعضاء",
-        value: String(
-          invite.approximateMemberCount ?? "غير متاح"
-        ),
+        value: String(invite.approximateMemberCount ?? "غير متاح"),
         inline: true
       },
       {
         name: "المتصلون",
-        value: String(
-          invite.approximatePresenceCount ?? "غير متاح"
-        ),
+        value: String(invite.approximatePresenceCount ?? "غير متاح"),
         inline: true
       }
     )
@@ -612,9 +633,7 @@ async function invitePreview(link, code) {
       text: `${CONFIG.name} • Discord Preview`
     });
 
-  const icon = guild.iconURL({
-    size: 512
-  });
+  const icon = guild.iconURL({ size: 512 });
 
   if (icon) {
     embed.setThumbnail(icon);
@@ -627,15 +646,12 @@ async function invitePreview(link, code) {
       .setURL(invite.url || link)
   );
 
-  return {
-    embed,
-    row
-  };
+  return { embed, row };
 }
 
-// =====================================
+// ==========================================
 // PREVIEW ENGINE
-// =====================================
+// ==========================================
 
 async function createPreview(link) {
   const invite = link.match(INVITE_REGEX);
@@ -655,25 +671,23 @@ async function createPreview(link) {
   return null;
 }
 
-// =====================================
+// ==========================================
 // BOT READY
-// =====================================
+// ==========================================
 
 client.once("ready", () => {
   console.log("");
-  console.log("================================");
-  console.log("       LARIKA BOT ONLINE");
-  console.log("================================");
+  console.log("==================================");
+  console.log("         LARIKA BOT ONLINE");
+  console.log("==================================");
 
   console.log("[LARIKA] Bot:", client.user.tag);
-  console.log("[LARIKA] ID:", client.user.id);
   console.log("[LARIKA] Servers:", client.guilds.cache.size);
-
   console.log("[LARIKA] Website Preview:", CONFIG.websitePreview);
   console.log("[LARIKA] Image Preview:", CONFIG.imagePreview);
   console.log("[LARIKA] Invite Preview:", CONFIG.discordInvitePreview);
 
-  console.log("================================");
+  console.log("==================================");
   console.log("");
 
   client.user.setActivity("Automatic Previews", {
@@ -681,9 +695,9 @@ client.once("ready", () => {
   });
 });
 
-// =====================================
-// MESSAGE SYSTEM
-// =====================================
+// ==========================================
+// MESSAGE HANDLER
+// ==========================================
 
 client.on("messageCreate", async message => {
   if (!message.guild) return;
@@ -702,20 +716,14 @@ client.on("messageCreate", async message => {
 
   const attachments = [
     ...message.attachments.values()
-  ].filter(file =>
-    file.contentType?.startsWith("image/")
-  );
+  ].filter(file => file.contentType?.startsWith("image/"));
 
-  if (!links.length && !attachments.length) {
-    return;
-  }
+  if (!links.length && !attachments.length) return;
 
   if (processed.size >= MAX_PROCESSED) {
     const oldest = processed.keys().next().value;
 
-    if (oldest) {
-      processed.delete(oldest);
-    }
+    if (oldest) processed.delete(oldest);
   }
 
   processed.set(message.id, Date.now());
@@ -726,7 +734,7 @@ client.on("messageCreate", async message => {
 
     for (const link of links) {
       try {
-        log("Processing:", link);
+        log("Processing link:", new URL(link).hostname);
 
         const result = await createPreview(link);
 
@@ -737,13 +745,11 @@ client.on("messageCreate", async message => {
         if (result?.row && !inviteRow) {
           inviteRow = result.row;
         }
-
       } catch (error) {
         log("Preview skipped:", error.message);
       }
     }
 
-    // Image attachments
     if (CONFIG.imagePreview) {
       for (const file of attachments) {
         if (embeds.length >= 10) break;
@@ -760,21 +766,12 @@ client.on("messageCreate", async message => {
       }
     }
 
-    if (!embeds.length) {
-      return;
-    }
+    if (!embeds.length) return;
 
     const payload = {
       embeds: embeds.slice(0, 10),
-
-      components: inviteRow
-        ? [inviteRow]
-        : [],
-
-      allowedMentions: {
-        parse: []
-      },
-
+      components: inviteRow ? [inviteRow] : [],
+      allowedMentions: { parse: [] },
       failIfNotExists: false
     };
 
@@ -785,18 +782,14 @@ client.on("messageCreate", async message => {
     }
 
     log("Preview sent successfully");
-
   } catch (error) {
-    console.error(
-      "[LARIKA] Preview error:",
-      error
-    );
+    console.error("[LARIKA] Message handler error:", error.message);
   }
 });
 
-// =====================================
-// DUPLICATE CLEANUP
-// =====================================
+// ==========================================
+// CLEANUP
+// ==========================================
 
 setInterval(() => {
   const cutoff = Date.now() - 60 * 60 * 1000;
@@ -808,76 +801,75 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000).unref();
 
-// =====================================
-// DISCORD DIAGNOSTICS
-// =====================================
+// ==========================================
+// DISCORD CONNECTION EVENTS
+// ==========================================
+
+client.on("shardConnecting", id => {
+  log("Gateway connecting. Shard:", id);
+});
+
+client.on("shardReady", id => {
+  log("Gateway READY. Shard:", id);
+});
+
+client.on("shardReconnecting", id => {
+  log("Gateway reconnecting. Shard:", id);
+});
+
+client.on("shardDisconnect", (event, id) => {
+  console.error(
+    "[LARIKA] Gateway disconnected:",
+    "Shard:", id,
+    "Code:", event.code,
+    "Reason:", event.reason || "No reason provided"
+  );
+});
+
+client.on("shardError", (error, id) => {
+  console.error(
+    "[LARIKA] Gateway shard error:",
+    id,
+    error.message
+  );
+});
 
 client.on("error", error => {
-  console.error("[LARIKA] Discord Error:", error);
-});
-
-client.on("shardError", (error, shardId) => {
-  console.error(
-    "[LARIKA] Shard Error:",
-    shardId,
-    error
-  );
-});
-
-client.on("shardDisconnect", (event, shardId) => {
-  console.error(
-    "[LARIKA] Shard Disconnected:",
-    shardId,
-    "Code:",
-    event.code,
-    "Reason:",
-    event.reason
-  );
-});
-
-client.on("shardReconnecting", shardId => {
-  log("Shard reconnecting:", shardId);
-});
-
-client.on("shardReady", shardId => {
-  log("Shard READY:", shardId);
+  console.error("[LARIKA] Discord client error:", error.message);
 });
 
 client.on("warn", warning => {
-  console.warn("[LARIKA] Discord Warning:", warning);
+  console.warn("[LARIKA] Discord warning:", warning);
 });
 
-// Optional detailed Discord debugging
-if (process.env.LARIKA_DEBUG === "true") {
-  client.on("debug", info => {
-    console.log("[DISCORD DEBUG]", info);
-  });
-}
+client.on("invalidated", () => {
+  console.error("[LARIKA] Discord session invalidated");
+});
 
 process.on("unhandledRejection", error => {
   console.error(
-    "[LARIKA] Unhandled Rejection:",
-    error
+    "[LARIKA] Unhandled rejection:",
+    error?.message || error
   );
 });
 
 process.on("uncaughtException", error => {
   console.error(
-    "[LARIKA] Uncaught Exception:",
+    "[LARIKA] Uncaught exception:",
     error
   );
 
-  // Exit so Render can restart a crashed process.
   process.exit(1);
 });
 
-// =====================================
-// DISCORD LOGIN
-// =====================================
+// ==========================================
+// START BOT
+// ==========================================
 
 async function startBot() {
   console.log("");
   console.log("[LARIKA] Starting Discord login...");
+  console.log("[LARIKA] Node version:", process.version);
 
   const token = process.env.DISCORD_TOKEN?.trim();
 
@@ -887,62 +879,51 @@ async function startBot() {
   );
 
   if (!token) {
-    console.error(
-      "[LARIKA] DISCORD_TOKEN is missing!"
-    );
-
+    console.error("[LARIKA] DISCORD_TOKEN is missing");
     process.exit(1);
   }
 
-  // Gateway connection watchdog
   const watchdog = setTimeout(() => {
     if (!client.isReady()) {
       console.error("");
+      console.error("[LARIKA] CONNECTION TIMEOUT");
       console.error(
-        "[LARIKA] CONNECTION TIMEOUT"
+        "[LARIKA] Discord Gateway has not reached READY after 45 seconds."
       );
-
       console.error(
-        "[LARIKA] Discord Gateway has not reached READY after 30 seconds."
+        "[LARIKA] Check the DNS/API results above and the Gateway events."
       );
-
-      console.error(
-        "[LARIKA] Check token, Gateway connectivity, DNS and Render logs."
-      );
-
       console.error("");
     }
-  }, 30000);
-
-  watchdog.unref();
+  }, 45000);
 
   try {
+    await testDiscordAPI(token);
+
+    console.log("[LARIKA] Starting Gateway login...");
+
     await client.login(token);
 
-    console.log(
-      "[LARIKA] Login request accepted."
-    );
+    console.log("[LARIKA] Login request accepted.");
 
   } catch (error) {
     clearTimeout(watchdog);
 
     console.error("");
-    console.error(
-      "[LARIKA] DISCORD LOGIN FAILED"
-    );
-
-    console.error("Error name:", error.name);
-    console.error("Error code:", error.code);
-    console.error("Error message:", error.message);
-
+    console.error("[LARIKA] STARTUP FAILED");
+    console.error("Error:", error.message);
     console.error("");
 
     process.exit(1);
   }
+
+  client.once("ready", () => {
+    clearTimeout(watchdog);
+  });
 }
 
-// =====================================
-// START
-// =====================================
+// ==========================================
+// PROCESS START
+// ==========================================
 
 startBot();
